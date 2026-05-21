@@ -1,0 +1,8 @@
+name = "code-marker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "CODE_MARKER"
+id = "1c816a60a1a24196aed914bc152bdf1e"
+preview_id = "0927d5e0368a4ceb97c8717c0a931929"

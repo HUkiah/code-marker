@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>演示：无组件（油猴脚本自动增强场景）</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 780px; margin: 0 auto; padding: 30px 20px; background: #f8fafc; color: #1a202c; line-height: 1.6; }
+    .badge { display: inline-block; background: #fef3c7; color: #92400e; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-bottom: 12px; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .meta { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+    .post { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    .post h2 { font-size: 16px; margin-bottom: 10px; }
+    /* 模拟 V2EX DOM 结构 */
+    .topic_content { font-size: 14px; color: #4a5568; line-height: 1.8; }
+    .reply-section { margin-top: 16px; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+    .reply-item { padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+    .reply-item .user { color: #2563eb; font-weight: 500; }
+    .reply_content { color: #374151; margin-top: 2px; }
+    .info-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: #92400e; margin-top: 20px; }
+    .demo-switch { margin-top: 20px; padding: 14px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; }
+    .demo-switch button { background: #3b82f6; color: #fff; border: none; border-radius: 5px; padding: 8px 16px; font-size: 13px; cursor: pointer; }
+    .demo-switch button:hover { background: #2563eb; }
+  </style>
+</head>
+<body>
+
+<span class="badge">场景演示</span>
+<h1>无组件 — 油猴脚本自动增强</h1>
+<p class="meta">此场景：发布者只是正常发帖贴了纯文本码，读者安装油猴脚本后自动识别 + 注入标记UI</p>
+
+<!-- 模拟 V2EX 帖子结构 -->
+<div class="post">
+  <h2>[分享] VPN 高级版 7 天试用码</h2>
+
+  <!-- .topic_content 是 V2EX 帖子正文的真实 class -->
+  <div class="topic_content">
+    <p>最近搞到几个试用码，有需要的自取，用完请回复说一声：</p>
+    <p>
+      VPN-TRIAL-7DAY-X8K2M<br>
+      VPN-TRIAL-7DAY-B3N9P<br>
+      VPN-TRIAL-7DAY-F5Q1W<br>
+      VPN-TRIAL-7DAY-H7J4R<br>
+      VPN-TRIAL-7DAY-T2V6Y
+    </p>
+    <p>激活方式：设置 → 兑换码 → 粘贴即可</p>
+  </div>
+
+  <!-- 模拟评论区 -->
+  <div class="reply-section">
+    <div class="reply-item">
+      <span class="user">@userA</span>
+      <div class="reply_content">VPN-TRIAL-7DAY-X8K2M 已用，感谢分享！</div>
+    </div>
+    <div class="reply-item">
+      <span class="user">@userB</span>
+      <div class="reply_content">刚试了 VPN-TRIAL-7DAY-B3N9P 已使用了，晚了一步</div>
+    </div>
+    <div class="reply-item">
+      <span class="user">@userC</span>
+      <div class="reply_content">VPN-TRIAL-7DAY-F5Q1W 可以用，激活成功，谢谢楼主</div>
+    </div>
+    <div class="reply-item">
+      <span class="user">@userD</span>
+      <div class="reply_content">感谢分享，坐等还有没有新码</div>
+    </div>
+  </div>
+</div>
+
+<div class="info-box">
+  <strong>说明：</strong>此页面模拟 V2EX 帖子 DOM 结构（.topic_content / .reply_content）。<br>
+  在真实 V2EX 中安装油猴脚本后，脚本会自动：<br>
+  1. 识别 topic_content 中的邀请码<br>
+  2. 扫描 reply_content 中的"已用"回复<br>
+  3. 在每个码旁注入标记按钮<br><br>
+  <strong>本 Demo 页面内联了脚本核心逻辑，点击下方按钮可模拟脚本效果：</strong>
+</div>
+
+<div class="demo-switch">
+  <button id="simulateBtn">模拟油猴脚本注入效果</button>
+  <span id="simStatus" style="margin-left:12px;font-size:12px;color:#64748b;"></span>
+</div>
+
+<!-- 内联脚本核心逻辑（用于 Demo 演示） -->
+<script>
+(function() {
+  var API = window.location.origin;
+  var THRESHOLD = 3;
+  var USED_KW = /已用|已使用|用过了|用完了|已经用了|已被使用|used|taken|失效/;
+  var VID_KEY = 'cm_vid';
+
+  function getVid() {
+    var v = localStorage.getItem(VID_KEY);
+    if (!v) { v = 'v_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8); localStorage.setItem(VID_KEY, v); }
+    return v;
+  }
+
+  function extractCodes(text) {
+    var re = /[A-Za-z0-9]{3,}(?:[-_][A-Za-z0-9]{3,}){1,}/g;
+    var matches = text.match(re) || [];
+    return [...new Set(matches)].filter(function(m){ return m.length >= 5; });
+  }
+
+  function parseComments(codes) {
+    var used = new Set();
+    document.querySelectorAll('.reply_content').forEach(function(el) {
+      var text = el.textContent;
+      codes.forEach(function(code) {
+        if (!text.includes(code)) return;
+        var idx = text.indexOf(code);
+        var ctx = text.substring(Math.max(0,idx-30), idx+code.length+30);
+        if (USED_KW.test(ctx)) used.add(code);
+      });
+    });
+    return used;
+  }
+
+  function injectStyle() {
+    if (document.getElementById('cm-demo-style')) return;
+    var s = document.createElement('style'); s.id = 'cm-demo-style';
+    s.textContent = '.cm-wrap{display:inline-flex;align-items:center;gap:3px;margin:0 2px;padding:2px 5px;border-radius:4px;background:#f7f8fa;border:1px solid #e2e8f0;vertical-align:middle;line-height:1.4}.cm-wrap.s-hi{background:#fef2f2;border-color:#fecaca}.cm-wrap.s-md{background:#fffbeb;border-color:#fde68a}.cm-wrap.s-ok{background:#f0fdf4;border-color:#bbf7d0}.cm-wrap .cm-c{font-family:"SF Mono",Menlo,monospace;font-size:13px;user-select:all}.cm-wrap.s-hi .cm-c{text-decoration:line-through;opacity:.55}.cm-wrap .cm-s{font-size:10px;white-space:nowrap}.cm-wrap .cm-b{border:none;border-radius:3px;padding:1px 5px;font-size:11px;cursor:pointer;transition:all .12s;line-height:1.4}.cm-wrap .cm-b:hover{transform:scale(1.08)}.cm-b-u{background:#fee2e2;color:#dc2626}.cm-b-u.on{background:#dc2626;color:#fff}.cm-b-a{background:#dcfce7;color:#16a34a}.cm-b-a.on{background:#16a34a;color:#fff}.cm-b-c{background:#f1f5f9;color:#475569}.cm-summary{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin:10px 0;font-size:12px;color:#64748b;display:flex;align-items:center;gap:12px}.cm-summary strong{color:#334155}.cm-toast{position:fixed;bottom:20px;right:20px;background:#1e293b;color:#fff;padding:7px 14px;border-radius:5px;font-size:12px;z-index:99999;opacity:0;transition:opacity .25s;pointer-events:none}.cm-toast.on{opacity:1}';
+    document.head.appendChild(s);
+  }
+
+  function toast(msg) {
+    var t = document.querySelector('.cm-toast');
+    if (!t) { t = document.createElement('div'); t.className = 'cm-toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.classList.add('on');
+    clearTimeout(t._tid); t._tid = setTimeout(function(){ t.classList.remove('on'); }, 1800);
+  }
+
+  async function simulate() {
+    var topicContent = document.querySelector('.topic_content');
+    if (!topicContent) return;
+
+    // 检测组件退让
+    if (document.querySelector('[data-cm-active]')) {
+      document.getElementById('simStatus').textContent = '检测到 widget 已激活，脚本退让';
+      return;
+    }
+
+    injectStyle();
+    var codes = extractCodes(topicContent.textContent);
+    if (!codes.length) { document.getElementById('simStatus').textContent = '未检测到候选码'; return; }
+
+    var pageId = '/demo-no-widget';
+    var vid = getVid();
+    var state = {};
+
+    // 获取 API 状态
+    try {
+      var resp = await fetch(API + '/api/codes?page=' + encodeURIComponent(pageId) + '&vid=' + vid);
+      var data = await resp.json();
+      if (data && data.codes) state = data.codes;
+    } catch(e) {}
+
+    var commentUsed = parseComments(codes);
+
+    // 注入 UI
+    var html = topicContent.innerHTML;
+    codes.forEach(function(code) {
+      var info = state[code] || null;
+      var uc = (info ? info.usedCount : 0) + (commentUsed.has(code) ? 1 : 0);
+      var ac = info ? info.availableCount : 0;
+      var myVote = info ? info.myVote : null;
+      var cls = uc >= THRESHOLD ? 's-hi' : uc > 0 ? 's-md' : ac > 0 ? 's-ok' : '';
+      var stat = '';
+      if (uc > 0) stat += '<span class="cm-s" style="color:#ef4444">' + uc + '&#10007;</span>';
+      if (ac > 0) stat += '<span class="cm-s" style="color:#22c55e">' + ac + '&#10003;</span>';
+      var rep = '<span class="cm-wrap ' + cls + '" data-cm-code="' + code + '">' +
+        '<span class="cm-c">' + code + '</span>' + stat +
+        '<button class="cm-b cm-b-u' + (myVote==='used'?' on':'') + '" data-a="used">&#10007;</button>' +
+        '<button class="cm-b cm-b-a' + (myVote==='available'?' on':'') + '" data-a="available">&#10003;</button>' +
+        '<button class="cm-b cm-b-c" data-a="copy">&#9112;</button></span>';
+      html = html.replace(code, rep);
+    });
+    topicContent.innerHTML = html;
+
+    // 摘要
+    var usedN = codes.filter(function(c){ return ((state[c]?state[c].usedCount:0)+(commentUsed.has(c)?1:0)) >= THRESHOLD || commentUsed.has(c); }).length;
+    var summary = document.createElement('div');
+    summary.className = 'cm-summary';
+    summary.innerHTML = '<span>识别到 <strong>'+codes.length+'</strong> 个码</span><span>|</span><span>评论区标记已用 <strong>'+commentUsed.size+'</strong></span><span style="margin-left:auto;font-size:11px;color:#a0aec0">code-marker 模拟注入</span>';
+    topicContent.parentNode.insertBefore(summary, topicContent.nextSibling);
+
+    // 事件
+    topicContent.addEventListener('click', async function(e) {
+      var btn = e.target.closest('.cm-b');
+      if (!btn) return;
+      var wrap = btn.closest('.cm-wrap');
+      var code = wrap.dataset.cmCode;
+      var action = btn.dataset.a;
+      if (action === 'copy') { navigator.clipboard.writeText(code); toast('已复制: '+code); return; }
+      var cur = state[code] ? state[code].myVote : null;
+      var real = cur === action ? 'clear' : action;
+      try {
+        var r = await fetch(API+'/api/codes/mark', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pageId:pageId,code:code,action:real,visitorId:vid}) });
+        var res = await r.json();
+        if (res.success) {
+          state[code] = { usedCount: res.usedCount, availableCount: res.availableCount, myVote: res.myVote };
+          var uc2 = res.usedCount + (commentUsed.has(code)?1:0);
+          var cls2 = uc2>=THRESHOLD?'s-hi':uc2>0?'s-md':res.availableCount>0?'s-ok':'';
+          wrap.className = 'cm-wrap ' + cls2;
+          wrap.querySelector('.cm-b-u').classList.toggle('on', res.myVote==='used');
+          wrap.querySelector('.cm-b-a').classList.toggle('on', res.myVote==='available');
+          if (cls2==='s-hi') { wrap.querySelector('.cm-c').style.textDecoration='line-through'; wrap.querySelector('.cm-c').style.opacity='.55'; }
+          else { wrap.querySelector('.cm-c').style.textDecoration=''; wrap.querySelector('.cm-c').style.opacity=''; }
+        }
+      } catch(err){}
+      var msgs = {used:'标记为「已用」',available:'标记为「可用」',clear:'已取消标记'};
+      toast(msgs[real]||'');
+    });
+
+    document.getElementById('simStatus').textContent = '已注入！识别到 ' + codes.length + ' 个码，评论区标记 ' + commentUsed.size + ' 个已用';
+    document.getElementById('simulateBtn').disabled = true;
+    document.getElementById('simulateBtn').textContent = '已注入';
+  }
+
+  document.getElementById('simulateBtn').addEventListener('click', simulate);
+})();
+</script>
+</body>
+</html>
