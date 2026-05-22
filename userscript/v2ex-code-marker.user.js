@@ -10,8 +10,9 @@
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
-// @connect      code-marker.YOUR.workers.dev
+// @connect      code-marker.kevenbrown770.workers.dev
 // @connect      localhost
+// @connect      *
 // @license      MIT
 // ==/UserScript==
 
@@ -30,12 +31,20 @@
     // Widget 退让检测等待时间 (ms)
     WIDGET_WAIT: 600,
 
-    // 内置正则规则（覆盖常见邀请码格式）
+    // 内置正则规则（覆盖常见邀请码格式，强匹配，避免泛滥误报）
     DEFAULT_PATTERNS: [
-      // 连字符分隔：XXXXX-XXXXX-XXXXX（至少两段，每段3+字符）
-      '[A-Za-z0-9]{3,}(?:[-_][A-Za-z0-9]{3,}){1,}',
-      // 纯字母数字混合（8-32位，必须同时含字母和数字）
-      '(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{8,32}',
+      // 连字符分隔：全大写+数字，每段 3-8 字符，2-4 段，且整体至少含一个数字
+      // 命中：BGTC-XKP6-WLP7 / LINGO-WFXX-JJ99 / ABC-1234-DEFG-5678
+      // 排除：data-utags-id / bi-tags-fill / SF-Mono-Menlo（小写） / no-Wrap（驼峰）
+      '\\b(?=[A-Z0-9-]*\\d)[A-Z0-9]{3,8}(?:-[A-Z0-9]{3,8}){1,3}\\b',
+      // 16 位全小写 hex（B 站邀请码、短 token 常见格式）
+      '\\b[a-f0-9]{16}\\b',
+      // 32 位全小写 hex（UUID/MD5 常见格式）
+      '\\b[a-f0-9]{32}\\b',
+      // 32 位全大写 hex
+      '\\b[A-F0-9]{32}\\b',
+      // 16 位全大写+数字（部分激活码使用）：必须同时含字母和数字
+      '\\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\\d)[A-Z0-9]{16}\\b',
     ],
 
     // 排除模式（误识别过滤）
@@ -44,11 +53,14 @@
       /^localhost$/i,
       /^undefined$/i,
       /^function$/i,
-      /^[A-Z]{2,5}-\d{3}$/,       // HTTP-200 等
+      /^[A-Z]{2,5}-\d{1,3}$/,     // HTTP-200, ISO-8859, T-100 等
       /^UTF-?8$/i,
-      /^[a-f0-9]{40}$/,           // git SHA
-      /^\d{8,}$/,                  // 纯数字
+      /^[a-f0-9]{40}$/,           // git SHA1
+      /^[a-f0-9]{64}$/,           // SHA256
+      /^\d+$/,                    // 纯数字
       /^(?:January|February|March|April|May|June|July|August|September|October|November|December)/i,
+      /^t-\d+$/i,                 // V2EX 主题 URL 片段
+      /^v\d+(?:[-.]\d+){1,3}$/i,  // 版本号 v1-2-3
     ],
 
     // 评论区"已用"关键词
@@ -287,6 +299,8 @@
   // ==================== 主流程 ====================
 
   async function main() {
+    console.log('[code-marker] 脚本已启动，等待页面加载...');
+
     // Step 1: 等待可能的 widget 挂载
     await new Promise(r => setTimeout(r, CONFIG.WIDGET_WAIT));
 
@@ -296,13 +310,27 @@
       return;
     }
 
-    // Step 3: 定位帖子正文
-    const topicContent = document.querySelector('.topic_content');
-    if (!topicContent) return;
+    // Step 3: 定位帖子正文 + 所有补充信息块
+    // V2EX 标准结构：
+    //   - 正文：.cell > .topic_content（可能内嵌 .markdown_body）
+    //   - 补充信息：.subtle > .topic_content（可能多个）
+    // querySelectorAll('.topic_content') 一次性拿到正文 + 全部补充信息，
+    // 且天然不会包含评论区（评论区用的是 .reply_content）
+    const contentBlocks = Array.from(document.querySelectorAll('.topic_content'));
+    if (!contentBlocks.length) {
+      console.log('[code-marker] 未找到 .topic_content 容器');
+      return;
+    }
+    console.log('[code-marker] 找到', contentBlocks.length, '个内容块（正文+补充信息）');
 
-    // Step 4: 提取码
-    const codes = extractCodes(topicContent.textContent);
-    if (!codes.length) return;
+    // Step 4: 仅在正文/补充信息中提取候选码（不扫评论区）
+    const fullText = contentBlocks.map(el => el.textContent).join('\n');
+    const codes = extractCodes(fullText);
+
+    if (!codes.length) {
+      console.log('[code-marker] 未识别到候选码，正文前 100 字:', fullText.slice(0, 100));
+      return;
+    }
 
     console.log('[code-marker] 识别到', codes.length, '个候选码:', codes);
 
@@ -319,65 +347,74 @@
       console.warn('[code-marker] API 不可用，仅使用评论区数据');
     }
 
-    // Step 6: 解析评论区
+    // Step 6: 解析评论区（仅用于"已用"信号收集，不参与候选码提取）
     const commentUsedSet = parseCommentsForUsed(codes);
 
-    // Step 7: 注入 UI
-    let html = topicContent.innerHTML;
-    codes.forEach(code => {
-      const info = state[code] || null;
-      const fromComment = commentUsedSet.has(code);
-      const replacement = buildInlineHtml(code, info, fromComment);
-      // 只替换第一次出现（避免重复替换）
-      html = html.replace(code, replacement);
+    // Step 7: 注入 UI —— 在每个内容块中替换码文本
+    contentBlocks.forEach(block => {
+      let html = block.innerHTML;
+      let mutated = false;
+      codes.forEach(code => {
+        const info = state[code] || null;
+        const fromComment = commentUsedSet.has(code);
+        const replacement = buildInlineHtml(code, info, fromComment);
+        // 只在该块第一次出现处替换（避免重复包裹）
+        if (html.indexOf(code) !== -1) {
+          html = html.replace(code, replacement);
+          mutated = true;
+        }
+      });
+      if (mutated) block.innerHTML = html;
     });
-    topicContent.innerHTML = html;
 
-    // 摘要栏
-    injectSummary(topicContent, codes, state, commentUsedSet);
+    // 摘要栏放在第一个内容块之后
+    const firstBlock = contentBlocks[0];
+    injectSummary(firstBlock, codes, state, commentUsedSet);
 
-    // Step 8: 事件绑定（事件委托）
-    topicContent.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.cm-b');
-      if (!btn) return;
+    // Step 8: 事件绑定（事件委托，每个块单独绑定）
+    contentBlocks.forEach(block => {
+      block.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.cm-b');
+        if (!btn) return;
 
-      const wrap = btn.closest('.cm-wrap');
-      if (!wrap) return;
-      const code = wrap.dataset.cmCode;
-      const action = btn.dataset.a;
+        const wrap = btn.closest('.cm-wrap');
+        if (!wrap) return;
+        const code = wrap.dataset.cmCode;
+        const action = btn.dataset.a;
 
-      if (action === 'copy') {
-        try { await navigator.clipboard.writeText(code); } catch (err) {
-          const ta = document.createElement('textarea');
-          ta.value = code; document.body.appendChild(ta); ta.select();
-          document.execCommand('copy'); document.body.removeChild(ta);
+        if (action === 'copy') {
+          try { await navigator.clipboard.writeText(code); } catch (err) {
+            const ta = document.createElement('textarea');
+            ta.value = code; document.body.appendChild(ta); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta);
+          }
+          toast('已复制: ' + code);
+          return;
         }
-        toast('已复制: ' + code);
-        return;
-      }
 
-      // 确定实际动作
-      const currentVote = state[code] ? state[code].myVote : null;
-      const realAction = currentVote === action ? 'clear' : action;
+        // 确定实际动作
+        const currentVote = state[code] ? state[code].myVote : null;
+        const realAction = currentVote === action ? 'clear' : action;
 
-      try {
-        const res = await apiPost('/api/codes/mark', { pageId, code, action: realAction });
-        if (res && res.success) {
-          state[code] = state[code] || { code, usedCount: 0, availableCount: 0, myVote: null };
-          state[code].usedCount = res.usedCount;
-          state[code].availableCount = res.availableCount;
-          state[code].myVote = res.myVote;
+        try {
+          const res = await apiPost('/api/codes/mark', { pageId, code, action: realAction });
+          if (res && res.success) {
+            state[code] = state[code] || { code, usedCount: 0, availableCount: 0, myVote: null };
+            state[code].usedCount = res.usedCount;
+            state[code].availableCount = res.availableCount;
+            state[code].myVote = res.myVote;
 
-          // 更新该行 UI
-          const newHtml = buildInlineHtml(code, state[code], commentUsedSet.has(code));
-          wrap.outerHTML = newHtml;
+            // 更新该行 UI
+            const newHtml = buildInlineHtml(code, state[code], commentUsedSet.has(code));
+            wrap.outerHTML = newHtml;
+          }
+        } catch (err) {
+          console.error('[code-marker] 标记失败:', err);
         }
-      } catch (err) {
-        console.error('[code-marker] 标记失败:', err);
-      }
 
-      const msgs = { used: '标记为「已用」', available: '标记为「可用」', clear: '已取消标记' };
-      toast(msgs[realAction] || '');
+        const msgs = { used: '标记为「已用」', available: '标记为「可用」', clear: '已取消标记' };
+        toast(msgs[realAction] || '');
+      });
     });
   }
 
